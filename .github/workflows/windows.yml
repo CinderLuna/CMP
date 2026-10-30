@@ -94,6 +94,9 @@ jobs:
             $smoke.Kill()
             throw 'UI smoke test exceeded 90 seconds'
           }
+          if (Test-Path -LiteralPath work/ui-smoke-details.txt) {
+            Get-Content -LiteralPath work/ui-smoke-details.txt
+          }
           if ($smoke.ExitCode -ne 0) { throw "UI smoke failed: $($smoke.ExitCode)" }
 
       - name: Upload test diagnostics
@@ -107,4 +110,7 @@ jobs:
             build/test-results.xml
             build/Testing/Temporary/*.log
             work/acceptance-results.json
-            work/cmp-smoke*.png
+            work/ui-smoke*.txt
+            work/cmp-*.png
+            work/schematic-labels-*.png
+            work/component-selection.png
