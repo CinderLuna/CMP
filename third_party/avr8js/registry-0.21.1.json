@@ -1,0 +1,111 @@
+{
+  "bugs": {
+    "url": "https://github.com/wokwi/avr8js/issues"
+  },
+  "dist": {
+    "shasum": "26995bcd13d85cf54fa348297c258e7555165617",
+    "tarball": "https://registry.npmjs.org/avr8js/-/avr8js-0.21.1.tgz",
+    "fileCount": 75,
+    "integrity": "sha512-lS1vPaB0gB2GXoPrHFQOUG/5CRORjvnmjbs8SiPZdJpt4HkV0+v6HnNeXxo/X9lPqumqphls2Qyql8zsw9rBaw==",
+    "signatures": [
+      {
+        "sig": "MEYCIQC6VgNaQ4bsgSW+s3bUXZAI/zqGEvTjXQxu/0B0bg8U4AIhAJnjQSHW0vLL8l91EAAzWPTwSaaBCatJe0lkqxu0woro",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ],
+    "unpackedSize": 400510
+  },
+  "main": "dist/cjs/index.js",
+  "name": "avr8js",
+  "alias": {
+    "avr8js": "./src"
+  },
+  "types": "./dist/esm/index.d.ts",
+  "author": {
+    "name": "Uri Shaked",
+    "email": "uri@urishaked.com"
+  },
+  "module": "./dist/esm/index.js",
+  "engines": {
+    "npm": ">= 10.0.0",
+    "node": ">= 20.19.0"
+  },
+  "gitHead": "bee6f0a94e0e27786f6bc21aee3c775849fb50fd",
+  "license": "MIT",
+  "scripts": {
+    "lint": "eslint src/ demo/",
+    "test": "npm run lint && vitest run",
+    "build": "rimraf dist && tsc --sourceMap false && tsc -m commonjs --outDir dist/cjs --sourceMap false",
+    "start": "vite demo",
+    "prepare": "husky && npm run build",
+    "benchmark": "tsx benchmark/index.ts",
+    "build:demo": "vite build demo",
+    "test:watch": "vitest",
+    "benchmark:prepare": "tsx benchmark/convert-instructions.ts"
+  },
+  "_npmUser": {
+    "name": "urish",
+    "email": "uri@urishaked.com"
+  },
+  "homepage": "https://github.com/wokwi/avr8js#readme",
+  "keywords": [
+    "Arduino",
+    "Arduino Uno",
+    "AVR",
+    "8 bit",
+    "MCU",
+    "simulation",
+    "simulator",
+    "ATmega",
+    "ATmega328p",
+    "microcontroller"
+  ],
+  "repository": {
+    "url": "git+https://github.com/wokwi/avr8js.git",
+    "type": "git"
+  },
+  "_npmVersion": "11.16.0",
+  "description": "Arduino (8-bit AVR) simulator, written in JavaScript and runs in the browser / Node.js",
+  "directories": {},
+  "lint-staged": {
+    "src/**/*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ]
+  },
+  "maintainers": [
+    {
+      "name": "urish",
+      "email": "uri@urishaked.com"
+    }
+  ],
+  "_nodeVersion": "24.18.0",
+  "browserslist": [
+    "last 1 Chrome versions"
+  ],
+  "_hasShrinkwrap": false,
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "vite": "^7.3.1",
+    "husky": "^9.1.7",
+    "eslint": "^9.0.0",
+    "rimraf": "^6.1.2",
+    "vitest": "^4.0.18",
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3",
+    "@types/node": "^22.0.0",
+    "lint-staged": "^16.2.7",
+    "@wokwi/elements": "^1.9.1",
+    "typescript-eslint": "^8.55.0",
+    "eslint-plugin-json": "^4.0.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "prettier-plugin-organize-imports": "^4.1.0"
+  },
+  "_npmOperationalInternal": {
+    "tmp": "tmp/avr8js_0.21.1_1788169825464_0.5778737418138258",
+    "host": "s3://npm-registry-packages-npm-production"
+  },
+  "_id": "avr8js@0.21.1",
+  "version": "0.21.1"
+}

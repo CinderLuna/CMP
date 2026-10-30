@@ -1,0 +1,110 @@
+name: Windows build and tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Windows x64 / ${{ matrix.configuration }}
+    runs-on: windows-2025
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      QT_QPA_PLATFORM: windows
+      PYTHONUTF8: '1'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+
+      - name: Install Qt and MinGW
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
+        with:
+          version: '6.9.3'
+          arch: win64_mingw
+          tools: 'tools_mingw1310,qt.tools.win64_mingw1310'
+          aqtversion: '==3.3.0'
+          setup-python: false
+          cache: false
+
+      - name: Set up pinned ngspice runtime
+        run: ./tools/setup-ngspice.ps1
+
+      - name: Check reproducible AVR bundle
+        run: |
+          python tools/bundle-avr.py
+          if ($LASTEXITCODE -ne 0) { throw 'AVR bundling failed' }
+          git diff --exit-code -- assets/cmp/runtime/avr.js
+          if ($LASTEXITCODE -ne 0) { throw 'AVR bundle differs from its sources' }
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+          -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build --parallel 4
+
+      - name: Deploy both editor and worker dependencies
+        run: |
+          windeployqt --no-translations build/cmp.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Editor deployment failed' }
+          windeployqt --no-translations build/cmp_worker.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Worker deployment failed' }
+
+      - name: Run all regression and sandbox tests
+        run: ctest --test-dir build --output-on-failure --parallel 3 --output-junit test-results.xml
+
+      - name: Stress concurrent worker initialization
+        run: ctest --test-dir build -R '^cmp_worker_launch$' --repeat until-fail:10 --output-on-failure
+
+      - name: Check interpreter fallback integration
+        env:
+          CMP_VM_INTERPRETER: '1'
+          QV4_FORCE_INTERPRETER: '1'
+        run: ctest --test-dir build -R '^cmp_(digital|avr|core_acceptance)$' --output-on-failure
+
+      - name: Native UI smoke test
+        run: |
+          $smoke = Start-Process -FilePath "$PWD/build/cmp.exe" -ArgumentList '--smoke' -WorkingDirectory $PWD -WindowStyle Hidden -PassThru
+          if (-not $smoke.WaitForExit(90000)) {
+            $smoke.Kill()
+            throw 'UI smoke test exceeded 90 seconds'
+          }
+          if ($smoke.ExitCode -ne 0) { throw "UI smoke failed: $($smoke.ExitCode)" }
+
+      - name: Upload test diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-diagnostics-${{ matrix.configuration }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            build/test-results.xml
+            build/Testing/Temporary/*.log
+            work/acceptance-results.json
+            work/cmp-smoke*.png

@@ -1,0 +1,7 @@
+/build/
+/build-*/
+/work/
+/third_party/ngspice/
+/third_party/ngspice-shared/
+/compile_commands.json
+/.cache/

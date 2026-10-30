@@ -1,0 +1,56 @@
+* CMP functional device models v0.1, authored for CMP, MIT license.
+* Reduced educational models. Not suitable for power, RF, thermal or signoff work.
+.model CMP_D D(Is=2.52n N=1.752 Rs=.568 Cjo=4p Tt=20n Bv=100 Ibv=.1u)
+.model CMP_LED D(Is=1e-20 N=2 Rs=8 Cjo=0 Bv=5 Ibv=10u)
+.model CMP_NPN NPN(Is=6.7f Bf=200 Vaf=100 Ikf=.1 Cje=4p Cjc=3p Tf=.3n)
+.model CMP_SW SW(Ron=10 Roff=1e12 Vt=.5 Vh=.05)
+* Pin order: ground trigger output reset control threshold discharge supply.
+.subckt CMP_555 vss trig out reset ctrl thr dis vcc
+Rdiv1 vcc ctrl 5k
+Rdiv2 ctrl ref 5k
+Rdiv3 ref vss 5k
+* Cross-coupled NOR latch with 100 ns propagation RC. Reset overrides set.
+Bset set vss V=(V(trig,vss)<V(ctrl,vss)/2 && V(reset,vss)>.7 && V(thr,vss)<V(ctrl,vss)) ? 1 : 0
+Bclr clr vss V=(V(thr,vss)>V(ctrl,vss) || V(reset,vss)<.7) ? 1 : 0
+Bnor1 dq vss V=(V(clr,vss)>.5 || V(qb,vss)>V(vcc,vss)/2) ? 0 : V(vcc,vss)
+Bnor2 dqb vss V=(V(set,vss)>.5 || V(q,vss)>V(vcc,vss)/2) ? 0 : V(vcc,vss)
+Rdelay1 dq q 100
+Rdelay2 dqb qb 100
+Cq q vss 1n IC=0
+Cqb qb vss 1n IC=5
+Bdis cd vss V=V(q,vss)<V(vcc,vss)/2 ? 1 : 0
+Sdis dis vss cd vss CMP_SW
+Bout drive vss V=V(q,vss)>V(vcc,vss)/2 ? max(V(vcc,vss)-.3,0) : .05
+Rout drive out 20
+.ends CMP_555
+
+* Original CMP LM339 educational model, MIT. Classic TI LM339N PDIP-14 pin order.
+* Four sink-only (within nonnegative output range) resistive open-collector channels.
+* Ron=40 ohm, Roff=1e12 ohm, zero offset/delay; no input-bias, temperature or damage model.
+* Both inputs must be within 0 .. VCC-1.5 V; invalid inputs or supply <2 V release output.
+* Outside supported ranges results are invalid and diagnosed, not hardware predictions.
+.model CMP_OC SW(Ron=40 Roff=1e12 Vt=.5 Vh=0)
+.subckt CMP_LM339_CH out inn inp vcc vss
+Bcontrol ctrl vss V=(V(vcc,vss)>=2 && V(inp,vss)>=0 && V(inn,vss)>=0 && V(inp,vss)<=V(vcc,vss)-1.5 && V(inn,vss)<=V(vcc,vss)-1.5 && V(inp,inn)<0) ? 1 : 0
+Scollector out vss ctrl vss CMP_OC
+RinputN inn vss 1e12
+RinputP inp vss 1e12
+.ends CMP_LM339_CH
+* pins: OUT1 OUT2 VCC IN2- IN2+ IN1- IN1+ IN3- IN3+ IN4- IN4+ GND OUT4 OUT3
+.subckt CMP_LM339 o1 o2 vcc n2 p2 n1 p1 n3 p3 n4 p4 vss o4 o3
+Xch1 o1 n1 p1 vcc vss CMP_LM339_CH
+Xch2 o2 n2 p2 vcc vss CMP_LM339_CH
+Xch3 o3 n3 p3 vcc vss CMP_LM339_CH
+Xch4 o4 n4 p4 vcc vss CMP_LM339_CH
+.ends CMP_LM339
+
+* Original CMP expanded discrete models, MIT; functional, not manufacturer signoff.
+.model CMP_PNP PNP(Is=1.4f Bf=180 Vaf=80 Ikf=.1 Cje=8p Cjc=4p Tf=.5n)
+.model CMP_RECT D(Is=5n N=1.9 Rs=.04 Bv=1000 Ibv=5u Cjo=15p Tt=2u)
+.model CMP_SCHOTTKY D(Is=1e-7 N=1.1 Rs=.08 Bv=40 Ibv=.001 Cjo=100p)
+.model CMP_LED_AMBER D(Is=1e-21 N=2 Rs=8 Bv=5 Ibv=10u)
+.model CMP_LED_GREEN D(Is=1e-22 N=2 Rs=8 Bv=5 Ibv=10u)
+.model CMP_LED_BLUE D(Is=1e-27 N=2 Rs=8 Bv=5 Ibv=10u)
+.model CMP_LED_WHITE D(Is=1e-27 N=2 Rs=8 Bv=5 Ibv=10u)
+
+.model CMP_PHOTOD D(Is=1e-12 N=1.5 Rs=10 Cjo=10p Bv=30 Ibv=1u)
