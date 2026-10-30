@@ -1,5 +1,4 @@
 #include "cmp/MainWindow.h"
-#include "cmp/Firmware.h"
 #include "cmp/Circuit.h"
 #include "cmp/CircuitTree.h"
 #include "cmp/CircuitView.h"
@@ -7,6 +6,7 @@
 #include "cmp/DigitalDevices.h"
 #include "cmp/ElectricalDiagnostics.h"
 #include "cmp/ExpandedLibrary.h"
+#include "cmp/Firmware.h"
 #include "cmp/GlobalSearch.h"
 #include "cmp/PackageArtwork.h"
 #include "cmp/Recovery.h"
@@ -15,9 +15,9 @@
 #include "cmp/Theme.h"
 #include "cmp/ToolIcons.h"
 #include "cmp/Waveform.h"
+#include "cmp/WindowHeader.h"
 #include "cmp/WindowSizeGrip.h"
 #include "cmp/WorkspaceTabs.h"
-#include "cmp/WindowHeader.h"
 #include <QtWidgets>
 #include <cmath>
 
@@ -2177,9 +2177,13 @@ void MainWindow::smokeTest()
     }
     {
         const auto original = s->doc.circuit.json();
+        const auto previousSize = size();
+        resize(1064, 800); // Exercise the smaller viewport used by hosted Windows desktops.
+        QCoreApplication::processEvents();
+        s->circuit->fit();
         QHash<QString, QColor> colors;
         bool endpoints = true, orthogonal = true, consistentColors = true;
-        QGraphicsItem *hoverWire = nullptr;
+        QList<QGraphicsPathItem *> hoverWires;
         for (auto *item : s->circuit->scene()->items())
             if (item->data(1).isValid())
             {
@@ -2205,31 +2209,43 @@ void MainWindow::smokeTest()
                 if (colors.contains(net))
                     consistentColors &= colors[net] == wire->pen().color();
                 colors[net] = wire->pen().color();
-                hoverWire = item;
+                hoverWires.append(wire);
             }
         check(endpoints && orthogonal && consistentColors && colors.size() > 3,
               "routed wires retain exact terminals orthogonal segments and consistent net colors");
-        if (hoverWire)
+        auto *canvas = s->circuit;
+        auto *target = canvas->viewport();
+        QGraphicsPathItem *hoverWire = nullptr;
+        QPoint wirePoint;
+        // Scene order does not guarantee the last wire has an exposed central segment.
+        // Find a suitable segment across all wires instead of depending on window size.
+        for (auto *candidate : hoverWires)
         {
-            auto *canvas = s->circuit;
-            auto *target = canvas->viewport();
-            QPoint wirePoint;
-            bool found = false;
-            auto path = static_cast<QGraphicsPathItem *>(hoverWire)->path();
-            for (int step = 1; step < 100 && !found; ++step)
+            const auto path = candidate->path();
+            for (int step = 1; step < 100 && !hoverWire; ++step)
             {
                 const QPoint point = canvas->mapFromScene(path.pointAtPercent(step / 100.));
+                if (!target->rect().adjusted(100, 100, -100, -100).contains(point))
+                    continue;
                 for (auto *item : canvas->items(point))
                 {
                     if (item->data(3).toBool())
                         continue;
-                    found =
-                        item == hoverWire && target->rect().adjusted(100, 100, -100, -100).contains(point);
+                    if (item == candidate)
+                    {
+                        hoverWire = candidate;
+                        wirePoint = point;
+                    }
                     break;
                 }
-                if (found)
-                    wirePoint = point;
             }
+            if (hoverWire)
+                break;
+        }
+        const bool found = hoverWire != nullptr;
+        check(found, "hover fixture finds an exposed wire in a small viewport");
+        if (hoverWire)
+        {
             auto mouse =
                 [&](QEvent::Type type, QPoint point, Qt::MouseButton button, Qt::MouseButtons buttons)
             {
@@ -2298,6 +2314,9 @@ void MainWindow::smokeTest()
                 "pan ignores stale scene hover at the drag origin and release hit-tests the current cursor");
             mouse(QEvent::MouseMove, {5, 5}, Qt::NoButton, Qt::NoButton);
         }
+        resize(previousSize);
+        QCoreApplication::processEvents();
+        canvas->fit();
     }
     {
         bool fullHeight = true;
@@ -2874,149 +2893,196 @@ void MainWindow::smokeTest()
     QString error;
     QTemporaryDir tmp(QDir::currentPath() + "/work/ui-test-XXXXXX");
     check(s->doc.save(tmp.filePath("smoke.cmp"), error), "save project");
-    s->toggleRun();
-
-    QTimer::singleShot(200, this,
-                       [=]
-                       {
-                           s->run->click();
-                           check(s->phase == "Paused", "combined button pause");
-                           QTimer::singleShot(150, this,
-                                              [=]
-                                              {
-                                                  s->run->click();
-                                                  check(s->phase == "Running", "combined button resume");
-                                              });
-                       });
-    QTimer::singleShot(550, this, [=] { s->stop->click(); });
-    QTimer::singleShot(
-        700, this,
-        [=]
+    const auto finishSmoke = [=]
+    {
+        check(s->phase == "Complete" && !s->plot->samples.isEmpty(), "solver completion after restart");
+        double parsed = 0;
+        check(parseQuantity(s->value->text(), parsed), "formatted value parses");
         {
-            check(s->phase == "Stopped" && !s->plot->samples.isEmpty(), "stop retains samples");
-            auto count = s->plot->samples.size();
-            QTimer::singleShot(100, this,
-                               [=]
-                               {
-                                   check(s->plot->samples.size() == count, "stop freezes samples");
-                                   s->resetRun();
-                                   check(s->plot->samples.isEmpty() && s->phase == "Ready",
-                                         "reset clears samples");
-                                   QTimer::singleShot(50, this, [=] { s->toggleRun(); });
-                               });
-        });
-    QTimer::singleShot(
-        9500, this,
-        [=]
+            QFile debug("work/property-debug.txt");
+            debug.open(QIODevice::WriteOnly);
+            QTextStream out(&debug);
+            out << s->selected << "\n"
+                << s->value->text() << "\n"
+                << s->value->styleSheet() << "\npropertyError=" << s->propertyError << "\n";
+        }
+        QString err;
+        check(s->plot->exportCsv("work/ui-waveforms.csv", err), "CSV export");
+        const auto circuitBeforeTheme = s->doc.circuit.json();
+        const auto sampleCount = s->plot->samples.size();
+        const int undoBeforeTheme = s->doc.undo.index();
+        const double oldStart = s->plot->start, oldEnd = s->plot->end, oldCursor = s->plot->cursor;
+        const bool oldVisible = s->plot->traces.front().visible;
+        s->plot->start = .5;
+        s->plot->end = 2.5;
+        s->plot->cursor = 1;
+        s->plot->traces.front().visible = false;
+        auto *darkAction = findChild<QAction *>("appearance_dark");
+        auto *lightAction = findChild<QAction *>("appearance_light");
+        darkAction->trigger();
+        check(isDarkTheme() && darkAction->isChecked() &&
+                  QSettings().value("appearance/mode").toString() == "dark",
+              "View Appearance Dark applies and persists its exclusive selection");
+        QCoreApplication::processEvents();
+        lightAction->trigger();
+        check(!isDarkTheme() && lightAction->isChecked() && !darkAction->isChecked() &&
+                  QSettings().value("appearance/mode").toString() == "light",
+              "View Appearance Light applies and persists its exclusive selection");
+        check(s->doc.circuit.json() == circuitBeforeTheme && s->doc.undo.index() == undoBeforeTheme &&
+                  s->plot->samples.size() == sampleCount && s->plot->start == .5 && s->plot->end == 2.5 &&
+                  s->plot->cursor == 1 && !s->plot->traces.front().visible,
+              "appearance switching retains circuit undo results waveform zoom cursor and trace "
+              "visibility");
+        s->plot->start = oldStart;
+        s->plot->end = oldEnd;
+        s->plot->cursor = oldCursor;
+        s->plot->traces.front().visible = oldVisible;
+        QCoreApplication::processEvents();
+        grab().save("work/cmp-light.png");
+        auto captureSchematicLabels = [&](const QString &path)
         {
-            check(s->phase == "Complete" && !s->plot->samples.isEmpty(), "solver completion after restart");
-            double parsed = 0;
-            check(parseQuantity(s->value->text(), parsed), "formatted value parses");
-            {
-                QFile debug("work/property-debug.txt");
-                debug.open(QIODevice::WriteOnly);
-                QTextStream out(&debug);
-                out << s->selected << "\n"
-                    << s->value->text() << "\n"
-                    << s->value->styleSheet() << "\npropertyError=" << s->propertyError << "\n";
-            }
-            QString err;
-            check(s->plot->exportCsv("work/ui-waveforms.csv", err), "CSV export");
-            const auto circuitBeforeTheme = s->doc.circuit.json();
-            const auto sampleCount = s->plot->samples.size();
-            const int undoBeforeTheme = s->doc.undo.index();
-            const double oldStart = s->plot->start, oldEnd = s->plot->end, oldCursor = s->plot->cursor;
-            const bool oldVisible = s->plot->traces.front().visible;
-            s->plot->start = .5;
-            s->plot->end = 2.5;
-            s->plot->cursor = 1;
-            s->plot->traces.front().visible = false;
-            auto *darkAction = findChild<QAction *>("appearance_dark");
-            auto *lightAction = findChild<QAction *>("appearance_light");
-            darkAction->trigger();
-            check(isDarkTheme() && darkAction->isChecked() &&
-                      QSettings().value("appearance/mode").toString() == "dark",
-                  "View Appearance Dark applies and persists its exclusive selection");
-            QCoreApplication::processEvents();
-            lightAction->trigger();
-            check(!isDarkTheme() && lightAction->isChecked() && !darkAction->isChecked() &&
-                      QSettings().value("appearance/mode").toString() == "light",
-                  "View Appearance Light applies and persists its exclusive selection");
-            check(s->doc.circuit.json() == circuitBeforeTheme && s->doc.undo.index() == undoBeforeTheme &&
-                      s->plot->samples.size() == sampleCount && s->plot->start == .5 && s->plot->end == 2.5 &&
-                      s->plot->cursor == 1 && !s->plot->traces.front().visible,
-                  "appearance switching retains circuit undo results waveform zoom cursor and trace "
-                  "visibility");
-            s->plot->start = oldStart;
-            s->plot->end = oldEnd;
-            s->plot->cursor = oldCursor;
-            s->plot->traces.front().visible = oldVisible;
-            QCoreApplication::processEvents();
-            grab().save("work/cmp-light.png");
-            auto captureSchematicLabels = [&](const QString &path)
-            {
-                s->left->setCurrentWidget(s->schematic);
-                QCoreApplication::processEvents();
-                s->schematic->resetTransform();
-                s->schematic->scale(1.5, 1.5);
-                s->schematic->centerOn(s->doc.circuit.part("U1")->position);
-                s->schematic->grab().save(path);
-                s->schematic->fit();
-                s->left->setCurrentWidget(s->circuit);
-                QCoreApplication::processEvents();
-            };
-            auto checkGrip = [&]
-            {
-                auto *grip = findChild<QSizeGrip *>("windowResizeGrip");
-                if (!grip)
-                    return false;
-                const auto image = grip->grab().toImage();
-                int visiblePixels = 0;
-                for (int y = 0; y < image.height(); ++y)
-                    for (int x = 0; x < image.width(); ++x)
-                        visiblePixels += image.pixelColor(x, y).rgb() != theme().panel.rgb();
-                return visiblePixels > 10 && grip->width() >= 18 &&
-                       (isMaximized() || isFullScreen() || grip->isVisible());
-            };
-            check(checkGrip(), "status resize grip has a visible high-contrast drawing in light mode");
-            captureSchematicLabels("work/schematic-labels-light.png");
-            darkAction->trigger();
-            QCoreApplication::processEvents();
-            grab().save("work/cmp-dark.png");
-            check(checkGrip(), "status resize grip has a visible high-contrast drawing in dark mode");
-            captureSchematicLabels("work/schematic-labels-dark.png");
-            showDocumentation("README.md");
-            QCoreApplication::processEvents();
-            if (auto *viewer = findChild<QDialog *>("documentationViewer"))
-            {
-                viewer->grab().save("work/cmp-dark-documentation.png");
-                viewer->close();
-            }
-            findChild<QAction *>("appearance_system")->trigger();
-            check(isDarkTheme() == (QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark),
-                  "Follow System resolves the current OS color scheme");
-            setAppearance(originalAppearance);
-            if (savedAppearance.isValid())
-                QSettings().setValue("appearance/mode", savedAppearance);
-            else
-                QSettings().remove("appearance/mode");
-            QCoreApplication::processEvents();
-            grab().save("work/cmp-ui.png");
             s->left->setCurrentWidget(s->schematic);
             QCoreApplication::processEvents();
-            grab().save("work/cmp-schematic.png");
-            s->splitViews();
-            grab().save("work/cmp-split.png");
-            QFile f("work/ui-smoke.txt");
-            f.open(QIODevice::WriteOnly);
-            f.write(*result ? "PASS: placement, pin wiring, rename, invalid-value rejection, "
-                              "undo, save, native solver, combined "
-                              "Run/Pause, Stop/Reset, CSV, tab split/merge\n"
-                            : "FAIL\n");
-            s->circuit->selectPart("C1");
-            s->schematic->selectPart("C1");
-            s->circuit->grab().save("work/component-selection.png");
-            QCoreApplication::exit(*result ? 0 : 2);
-        });
+            s->schematic->resetTransform();
+            s->schematic->scale(1.5, 1.5);
+            s->schematic->centerOn(s->doc.circuit.part("U1")->position);
+            s->schematic->grab().save(path);
+            s->schematic->fit();
+            s->left->setCurrentWidget(s->circuit);
+            QCoreApplication::processEvents();
+        };
+        auto checkGrip = [&]
+        {
+            auto *grip = findChild<QSizeGrip *>("windowResizeGrip");
+            if (!grip)
+                return false;
+            const auto image = grip->grab().toImage();
+            int visiblePixels = 0;
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x)
+                    visiblePixels += image.pixelColor(x, y).rgb() != theme().panel.rgb();
+            return visiblePixels > 10 && grip->width() >= 18 &&
+                   (isMaximized() || isFullScreen() || grip->isVisible());
+        };
+        check(checkGrip(), "status resize grip has a visible high-contrast drawing in light mode");
+        captureSchematicLabels("work/schematic-labels-light.png");
+        darkAction->trigger();
+        QCoreApplication::processEvents();
+        grab().save("work/cmp-dark.png");
+        check(checkGrip(), "status resize grip has a visible high-contrast drawing in dark mode");
+        captureSchematicLabels("work/schematic-labels-dark.png");
+        showDocumentation("README.md");
+        QCoreApplication::processEvents();
+        if (auto *viewer = findChild<QDialog *>("documentationViewer"))
+        {
+            viewer->grab().save("work/cmp-dark-documentation.png");
+            viewer->close();
+        }
+        findChild<QAction *>("appearance_system")->trigger();
+        check(isDarkTheme() == (QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark),
+              "Follow System resolves the current OS color scheme");
+        setAppearance(originalAppearance);
+        if (savedAppearance.isValid())
+            QSettings().setValue("appearance/mode", savedAppearance);
+        else
+            QSettings().remove("appearance/mode");
+        QCoreApplication::processEvents();
+        grab().save("work/cmp-ui.png");
+        s->left->setCurrentWidget(s->schematic);
+        QCoreApplication::processEvents();
+        grab().save("work/cmp-schematic.png");
+        s->splitViews();
+        grab().save("work/cmp-split.png");
+        QFile f("work/ui-smoke.txt");
+        f.open(QIODevice::WriteOnly);
+        f.write(*result ? "PASS: placement, pin wiring, rename, invalid-value rejection, "
+                          "undo, save, native solver, combined "
+                          "Run/Pause, Stop/Reset, CSV, tab split/merge\n"
+                        : "FAIL\n");
+        s->circuit->selectPart("C1");
+        s->schematic->selectPart("C1");
+        s->circuit->grab().save("work/component-selection.png");
+        QCoreApplication::exit(*result ? 0 : 2);
+    };
+    struct SmokeProgress
+    {
+        int stage = 0;
+        qsizetype stoppedSamples = 0;
+        QElapsedTimer deadline;
+    };
+    auto progress = std::make_shared<SmokeProgress>();
+    progress->deadline.start();
+    auto *simulationCheck = new QTimer(this);
+    simulationCheck->setInterval(20);
+    connect(simulationCheck, &QTimer::timeout, this,
+            [=]
+            {
+                const auto elapsed = progress->deadline.elapsed();
+                const auto next = [&]
+                {
+                    ++progress->stage;
+                    progress->deadline.restart();
+                };
+                const auto finish = [&]
+                {
+                    simulationCheck->stop();
+                    simulationCheck->deleteLater();
+                    finishSmoke();
+                };
+                if (s->phase == "Failed" || elapsed > 20000)
+                {
+                    check(false, "simulation smoke stage " + QString::number(progress->stage) +
+                                     " failed in state " + s->phase + ": " + s->diagnostics->toPlainText());
+                    s->simulator.stop();
+                    finish();
+                    return;
+                }
+                switch (progress->stage)
+                {
+                case 0:
+                    // Hosted runners can take longer than 200 ms to initialize a restricted worker.
+                    // Exercise the controls only once the solver has started and delivered samples.
+                    if (s->phase == "Running" && !s->plot->samples.isEmpty())
+                    {
+                        s->run->click();
+                        check(s->phase == "Paused", "combined button pause");
+                        next();
+                    }
+                    break;
+                case 1:
+                    if (elapsed >= 150)
+                    {
+                        s->run->click();
+                        check(s->phase == "Running", "combined button resume");
+                        next();
+                    }
+                    break;
+                case 2:
+                    if (elapsed >= 200)
+                    {
+                        s->stop->click();
+                        check(s->phase == "Stopped" && !s->plot->samples.isEmpty(), "stop retains samples");
+                        progress->stoppedSamples = s->plot->samples.size();
+                        next();
+                    }
+                    break;
+                case 3:
+                    if (elapsed >= 100)
+                    {
+                        check(s->plot->samples.size() == progress->stoppedSamples, "stop freezes samples");
+                        s->resetRun();
+                        check(s->plot->samples.isEmpty() && s->phase == "Ready", "reset clears samples");
+                        s->toggleRun();
+                        next();
+                    }
+                    break;
+                case 4:
+                    if (s->phase == "Complete")
+                        finish();
+                    break;
+                }
+            });
+    s->toggleRun();
+    simulationCheck->start();
 }
 } // namespace cmp
